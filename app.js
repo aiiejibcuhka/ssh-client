@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const readline = require('readline');
 // const fs = require('fs');
 const [node, file, ...execArgs] = process.argv;
 
@@ -16,10 +17,18 @@ class Client {
   constructor(options) {
     this._process = this.connect(options);
 
-    this._process.stdin.on('data', this.stdinOnData.bind(this));
+    // process.stdin.pipe(this._process.stdin);
+    // this._process.stdout.pipe(process.stdout);
+    // this._process.stdin.on('data', this.stdinOnData.bind(this));
     this._process.stdout.on('data', this.stdoutOnData.bind(this));
     this._process.stderr.on('data', this.stderrOnData.bind(this));
     this._process.on('close', this.onClose.bind(this));
+    // // prevent control+c
+    // this._process.on('SIGINT', () => {
+    //   this.writeCommand('exit');
+    // });
+
+    this._writingCommand = '';
 
     return this;
   }
@@ -36,23 +45,25 @@ class Client {
     return spawn('ssh', connectionOptions);
   }
   
-  /**
-   * Show data wrote on remote server
-   * @param {any} data buffer sent to server
-   */
-  stdinOnData(data) {
-    console.log(`stdinOnData: Received ${data.length} bytes of data.`);
-    if (!this.isPending) {
-      console.log(`stdinOnData: ${data}`);
-    }
-  }
+  // /**
+  //  * Show data wrote on remote server
+  //  * @param {any} data buffer sent to server
+  //  */
+  // stdinOnData(data) {
+  //   console.log(`stdinOnData: Received ${data.length} bytes of data.`);
+  //   if (!this.isPending) {
+  //     console.log(`stdinOnData: ${data}`);
+  //   }
+  // }
   
   /**
    * Show data received from remote server and sends it to parent process
    * @param {any} data buffer received from server
    */
   stdoutOnData(data) {
-    console.log(`stdoutOnData: Received ${data.length} bytes of data.`);
+    // I think we can use it, when want to stop enter any new command until current finished
+    // readable.resume()
+    // console.log(`stdoutOnData: Received ${data.length} bytes of data.`);
     const response = data.toString().split('\r\n');
     if (!this.isPending) {
       process.stdout.write(data);
@@ -75,6 +86,8 @@ class Client {
    */
   onClose(code) {
     console.log(`ssh child process exited with code ${code}`);
+    this._process = undefined;
+    process.exit();
   }
 
   /**
@@ -148,15 +161,15 @@ class Client {
    * @param {SCP_ACTIONS} action string
    */
   runExternalAction(action) {
-    this._getFileName();
+    // this._getFileName();
     // get cwd
-    client.writeCommand('pwd\n');
+    // client.writeCommand('pwd\n');
     
     // set pending action and reset cwd
     this.isPending = true;
     this._cwd = undefined;
 
-    process.stdout.write(`start ${action}ing...\n`);
+    process.stdout.write(`\nstart ${action}ing...\n`);
 
     let idleTime = 0;
     const interval = 50;
@@ -178,15 +191,47 @@ class Client {
       this._runScp(action);
     }, interval);
   }
+
+  _resetWritingCommand() {
+    this._writingCommand = '';
+  }
 }
 
 const client = new Client(execArgs);
 
-process.stdin.on('readable', () => {
-  const chunk = process.stdin.read();
-  if (chunk !== null) {
-    client.writeCommand(chunk);
+readline.emitKeypressEvents(process.stdin);
+process.stdin.setRawMode(true);
+process.stdin.on('keypress', (str, key) => {
+  // console.log(`\nYou pressed the "${str}" key`);
+  if (key.ctrl && key.name === 'c') {
+    if (client._process) {
+      client._process.stdin.write(key.sequence);
+    } else {
+      process.exit();
+    }
+  } else if (key.name === 'return') {
+    // client.writeCommand(client._writingCommand);
+    
+    // ignore any command until fisnished scp process
+    // if (client.isPending) return this;
+    client.lastComand = client._writingCommand;
+    client._resetWritingCommand();
+    client._getFileName();
+    
+    const action = client._getExternalAction();
+    if (action) {
+      client.isPending = true;
+      client._process.stdin.write(key.sequence);
+      client.lastComand = 'pwd\n';
+      client._process.stdin.write('pwd\n');
+      return client.runExternalAction(action);
+    }
+    client._process.stdin.write(key.sequence);
+  } else {
+    client._writingCommand = client._writingCommand + str;
+    client._process.stdin.write(key.sequence);
   }
+  return;
 });
 
 process.stdin.on('end', () => {
