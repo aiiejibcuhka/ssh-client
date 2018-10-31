@@ -1,6 +1,5 @@
 const { spawn } = require('child_process');
 const readline = require('readline');
-// const fs = require('fs');
 const [node, file, ...execArgs] = process.argv;
 
 const SCP_ACTIONS = {
@@ -17,20 +16,24 @@ class Client {
   constructor(options) {
     this._process = this.connect(options);
 
-    // process.stdin.pipe(this._process.stdin);
-    // this._process.stdout.pipe(process.stdout);
-    // this._process.stdin.on('data', this.stdinOnData.bind(this));
     this._process.stdout.on('data', this.stdoutOnData.bind(this));
     this._process.stderr.on('data', this.stderrOnData.bind(this));
     this._process.on('close', this.onClose.bind(this));
-    // // prevent control+c
-    // this._process.on('SIGINT', () => {
-    //   this.writeCommand('exit');
-    // });
 
     this._writingCommand = '';
+    this._logEnabled = true;
 
     return this;
+  }
+
+  /**
+   * Write log lines to main rpcess
+   * @param {String} line info data
+   */
+  _log(line) {
+    if (this._logEnabled) {
+      process.stdout.write(`\n${line}`);
+    }
   }
 
   /**
@@ -45,17 +48,6 @@ class Client {
     return spawn('ssh', connectionOptions);
   }
   
-  // /**
-  //  * Show data wrote on remote server
-  //  * @param {any} data buffer sent to server
-  //  */
-  // stdinOnData(data) {
-  //   console.log(`stdinOnData: Received ${data.length} bytes of data.`);
-  //   if (!this.isPending) {
-  //     console.log(`stdinOnData: ${data}`);
-  //   }
-  // }
-  
   /**
    * Show data received from remote server and sends it to parent process
    * @param {any} data buffer received from server
@@ -63,9 +55,9 @@ class Client {
   stdoutOnData(data) {
     // I think we can use it, when want to stop enter any new command until current finished
     // readable.resume()
-    // console.log(`stdoutOnData: Received ${data.length} bytes of data.`);
     const response = data.toString().split('\r\n');
     if (!this.isPending) {
+      // this._log(`received data ${data.length}`);
       process.stdout.write(data);
     } else if (this.isPending && this.lastComand === 'pwd\n') {
       this._cwd = response[1];
@@ -77,7 +69,7 @@ class Client {
    * @param {any} error buffer received from server
    */
   stderrOnData(error) {
-    console.log(`stderrOnData: ${error}`);
+    this._log(`${error}`);
   }
 
   /**
@@ -85,7 +77,7 @@ class Client {
    * @param {number} code number
    */
   onClose(code) {
-    console.log(`ssh child process exited with code ${code}`);
+    this._log(`ssh client has closed ${code}`);
     this._process = undefined;
     process.exit();
   }
@@ -95,37 +87,40 @@ class Client {
    * @return {string|undefined} scp action
    */
   _getExternalAction() {
-    const pairs = this.lastComand.split(' ');
+    const pairs = this._writingCommand.split(' ');
     return (pairs && pairs[0] && EXTERNAL_COMMANDS[pairs[0]]);
   }
 
   /**
    * Sends command to ssh process
-   * @param {buffer} line bufer string
+   * @param {Object} key keypress object
    */
-  writeCommand(line) {
-    // ignore any command until fisnished scp process
-    if (this.isPending) return this;
-    this.lastComand = line.toString();
-    const action = this._getExternalAction();
-    
-    if (action) {
-      return this.runExternalAction(action);
-    }
-    
-    this._process.stdin.write(line);
+  writeCommand(key) {
+    this._process.stdin.write(key.sequence);
     return this;
   }
 
   /**
    * try to find file data in received command
    */
-  _getFileName() {
-    const pairs = this.lastComand.replace('\n', '').split(' ');
+  _parseCommandLineAndgetFileName(commandLine) {
+    const pairs = commandLine.replace('\n', '').split(' ');
     this._filePath = pairs && pairs[1];
     const filePairs = this._filePath && this._filePath.split('/');
     this._fileName = filePairs && filePairs[filePairs.length - 1];
     return this;
+  }
+
+  /**
+   * Parse command line, try to get file name and path and check the external action
+   * @return {SCP_ACTIONS|undefined}
+   */
+  checkCommandAndGetAction() {
+    const action = this._getExternalAction();
+    this._parseCommandLineAndgetFileName(this._writingCommand);
+    this._resetWritingCommand();
+
+    return action;
   }
 
   /**
@@ -148,28 +143,33 @@ class Client {
 
     const scpProcess = spawn('scp', actionOptions);
     scpProcess.stderr.on('data', (err) => {
-      process.stdout.write(`${action}ing err: ${err}\n`);
+      this._log(`${action}ing err: ${err}`);
     });
     scpProcess.on('close', (code) => {
-      process.stdout.write(`${action}ing finished with code: ${code}\n`);
+      this._log(`${action}ing finished with code: ${code}`);
       this.isPending = false;
+      this._process.stdin.write('\r');
     });
   }
 
   /**
    * Get cwd. Run external action.
    * @param {SCP_ACTIONS} action string
+   * @param {Object} key keypress object
    */
-  runExternalAction(action) {
-    // this._getFileName();
-    // get cwd
-    // client.writeCommand('pwd\n');
-    
-    // set pending action and reset cwd
+  runExternalAction(action, key) {
+    // set flag, that do not show response from server
     this.isPending = true;
     this._cwd = undefined;
 
-    process.stdout.write(`\nstart ${action}ing...\n`);
+    // exec bad command to do command line is empty
+    this._process.stdin.write(key.sequence);
+    
+    // call service command to get cwd and know full path for the scp actions
+    this.lastComand = 'pwd\n';
+    this._process.stdin.write('pwd\n');
+
+    this._log(`start ${action}ing...`);
 
     let idleTime = 0;
     const interval = 50;
@@ -177,9 +177,9 @@ class Client {
     // wait cwd and start downloading
     const timer = setInterval(() => {
       idleTime = idleTime + interval;
-      console.log('idleTime', idleTime);
+      this._log(`idleTime: ${idleTime}`);
       if (idleTime > waitLimit) {
-        process.stdout.write('Too many time are waitnig, stop download\n');
+        this._log('Too many time are waitnig, stop download');
         clearInterval(timer);
         this.isPending = false;
         return false;
@@ -192,8 +192,32 @@ class Client {
     }, interval);
   }
 
+  /**
+   * do _writingCommand is empty
+   */
   _resetWritingCommand() {
     this._writingCommand = '';
+    return this;
+  }
+  
+  /**
+   * add new symbol to writing command
+   */
+  updateWritingCommand(str) {
+    this._writingCommand = this._writingCommand + str;
+    return this;
+  }
+
+  /**
+   * Close REPL command
+   * @param {Object} key keypress object
+   */
+  closeCommand(key) {
+    if (client._process) {
+      client._process.stdin.write(key.sequence);
+    } else {
+      process.exit();
+    }
   }
 }
 
@@ -202,34 +226,22 @@ const client = new Client(execArgs);
 readline.emitKeypressEvents(process.stdin);
 process.stdin.setRawMode(true);
 process.stdin.on('keypress', (str, key) => {
-  // console.log(`\nYou pressed the "${str}" key`);
+  // close action
   if (key.ctrl && key.name === 'c') {
-    if (client._process) {
-      client._process.stdin.write(key.sequence);
-    } else {
-      process.exit();
-    }
+    client.closeCommand(key);
   } else if (key.name === 'return') {
-    // client.writeCommand(client._writingCommand);
-    
-    // ignore any command until fisnished scp process
-    // if (client.isPending) return this;
-    client.lastComand = client._writingCommand;
-    client._resetWritingCommand();
-    client._getFileName();
-    
-    const action = client._getExternalAction();
+    // it does not work if you choose external command from history
+    // enter action run external action or regural command
+    const action = client.checkCommandAndGetAction();
     if (action) {
-      client.isPending = true;
-      client._process.stdin.write(key.sequence);
-      client.lastComand = 'pwd\n';
-      client._process.stdin.write('pwd\n');
-      return client.runExternalAction(action);
+      return client.runExternalAction(action, key);
     }
-    client._process.stdin.write(key.sequence);
+    client.writeCommand(key);
   } else {
-    client._writingCommand = client._writingCommand + str;
-    client._process.stdin.write(key.sequence);
+    // @TODO: need to resolve "backspace" action to writing command
+    // write to child process and save new char to writing command
+    client.updateWritingCommand(str);
+    client.writeCommand(key);
   }
   return;
 });
