@@ -21,7 +21,8 @@ process.stdin.on('keypress', (str, key) => {
   } else {
     // @TODO: need to resolve "backspace" action to writing command
     // write to child process and save new char to writing command
-    client.updateWritingCommand(str);
+    const newChar = key.name !== 'backspace' ? str : false;
+    client.updateWritingCommand(newChar);
     client.writeCommand(key);
   }
   return;

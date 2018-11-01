@@ -202,6 +202,12 @@ class Client {
    * add new symbol to writing command
    */
   updateWritingCommand(str) {
+    if (str === false) {
+      // delete last char
+      this._writingCommand = this._writingCommand.substr(0, this._writingCommand.length - 1 || 0);
+      return this;
+    }
+
     this._writingCommand = this._writingCommand + str;
     return this;
   }
