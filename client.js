@@ -73,7 +73,7 @@ function _runScp(action) {
     this.log(`${action}ing err: ${err}`);
   });
   scpProcess.on('close', (code) => {
-    this.log(`${action}ing finished with code: ${code}`);
+    this.log(`${action}ing file "${_fileName}" finished with code: ${code}`);
     this.isPending = false;
     this._process.stdin.write('\r');
   });
@@ -114,7 +114,9 @@ class Client {
     if (!this.isPending) {
       process.stdout.write(data);
     } else if (this.isPending && this.lastComand === 'pwd\n') {
-      this._cwd = response[1];
+      if (response && data.toString().indexOf('command not found') === -1) {
+        this._cwd = response[1];
+      }
     }
   }
   
@@ -169,7 +171,6 @@ class Client {
 
     // exec bad command to do command line is empty
     this._process.stdin.write(key.sequence);
-    
     // call service command to get cwd and know full path for the scp actions
     this.lastComand = 'pwd\n';
     this._process.stdin.write('pwd\n');
@@ -188,7 +189,7 @@ class Client {
       idleTime = idleTime + interval;
       this.log(`idleTime: ${idleTime}`);
       if (idleTime > waitLimit) {
-        this.log('Too many time are waitnig, stop download');
+        this.log('Too many time are waitnig, stop waiting cwd and downloading');
         clearInterval(timer);
         this.isPending = false;
         return false;
@@ -210,7 +211,9 @@ class Client {
       return this;
     }
 
-    this._writingCommand = this._writingCommand + str;
+    if (str) {
+      this._writingCommand = this._writingCommand + str;
+    }
     return this;
   }
 
