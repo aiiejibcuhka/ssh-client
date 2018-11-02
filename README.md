@@ -4,7 +4,7 @@ Simple ssh client
 
 ### start
 
-`node app.js user@host [other ssh flags]` start ssh client. Example "node app.js user@0.0.0.0 -i key.file"
+`node app.js user@host [other ssh flags]` start ssh client. Example `node app.js user@0.0.0.0 -i key.file`
 
 ### external commands
 
