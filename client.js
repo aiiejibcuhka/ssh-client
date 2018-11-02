@@ -114,8 +114,9 @@ class Client {
     if (!this.isPending) {
       process.stdout.write(data);
     } else if (this.isPending && this.lastComand === 'pwd\n') {
-      if (response && data.toString().indexOf('command not found') === -1) {
-        this._cwd = response[1];
+      const isPwdCommand = data.toString().indexOf('pwd') !== -1;
+      if (response && isPwdCommand) {
+        this._cwd = response[response.length - 2];
       }
     }
   }
@@ -189,7 +190,7 @@ class Client {
       idleTime = idleTime + interval;
       this.log(`idleTime: ${idleTime}`);
       if (idleTime > waitLimit) {
-        this.log('Too many time are waitnig, stop waiting cwd and downloading');
+        this.log('Too many time are waitnig, stop waiting cwd and downloading\n');
         clearInterval(timer);
         this.isPending = false;
         return false;
